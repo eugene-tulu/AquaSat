@@ -118,14 +118,17 @@ def validate_dates(date_list: List[str]) -> Tuple[bool, str, List[str]]:
         
         for date_str in date_list:
             try:
-                date_obj = pd.to_datetime(date_str).date()
+                # Parse date and ensure it's timezone-naive
+                parsed_date = pd.to_datetime(date_str, utc=True).tz_localize(None)
+                date_obj = parsed_date.date()
+                
                 # Don't allow future dates beyond tomorrow
                 if date_obj > current_date + timedelta(days=1):
                     logger.warning(f"Skipping future date: {date_str}")
                     continue
                 valid_dates.append(date_str)
-            except:
-                logger.warning(f"Skipping invalid date: {date_str}")
+            except Exception as e:
+                logger.warning(f"Skipping invalid date {date_str}: {e}")
                 continue
         
         if not valid_dates:
@@ -148,9 +151,10 @@ def fetch_items_for_dates(bounds: List[float], date_list: List[str],
             headers={"User-Agent": "AquaSat-Pro/1.0"}
         )
 
-        target_dates = pd.to_datetime(date_list).sort_values()
-        min_search = (target_dates.min() - timedelta(days=window_days + 30)).strftime("%Y-%m-%d")
-        max_search = (target_dates.max() + timedelta(days=window_days)).strftime("%Y-%m-%d")
+        # Ensure all dates are timezone-naive
+        target_dates = pd.to_datetime(date_list, utc=True).tz_localize(None).sort_values()
+        min_search = (target_dates.min() - pd.Timedelta(days=window_days + 30)).strftime("%Y-%m-%d")
+        max_search = (target_dates.max() + pd.Timedelta(days=window_days)).strftime("%Y-%m-%d")
         date_range = f"{min_search}/{max_search}"
 
         # Search with retry logic
@@ -178,10 +182,12 @@ def fetch_items_for_dates(bounds: List[float], date_list: List[str],
             return {}
 
         items_by_date = {}
-        item_datetimes = [pd.to_datetime(item.datetime) for item in all_items]
+        # Ensure item datetimes are timezone-naive for comparison
+        item_datetimes = [pd.to_datetime(item.datetime, utc=True).tz_localize(None) for item in all_items]
 
         for target_date_str in date_list:
-            target_date = pd.to_datetime(target_date_str)
+            # Ensure target date is timezone-naive
+            target_date = pd.to_datetime(target_date_str, utc=True).tz_localize(None)
 
             # 1. Try within window
             candidates = [
@@ -190,7 +196,7 @@ def fetch_items_for_dates(bounds: List[float], date_list: List[str],
             ]
 
             if candidates:
-                closest = min(candidates, key=lambda item: abs(pd.to_datetime(item.datetime) - target_date))
+                closest = min(candidates, key=lambda item: abs(pd.to_datetime(item.datetime, utc=True).tz_localize(None) - target_date))
                 items_by_date[target_date_str] = closest
                 continue
 
@@ -201,7 +207,7 @@ def fetch_items_for_dates(bounds: List[float], date_list: List[str],
             ]
 
             if past_candidates:
-                most_recent = max(past_candidates, key=lambda item: pd.to_datetime(item.datetime))
+                most_recent = max(past_candidates, key=lambda item: pd.to_datetime(item.datetime, utc=True).tz_localize(None))
                 items_by_date[target_date_str] = most_recent
             else:
                 logger.warning(f"No image found before {target_date_str}")
@@ -492,7 +498,7 @@ with st.sidebar:
                     st.error("CSV must have 'date' column")
                     date_list = []
                 else:
-                    df_dates['date'] = pd.to_datetime(df_dates['date'], errors='coerce')
+                    df_dates['date'] = pd.to_datetime(df_dates['date'], errors='coerce', utc=True).dt.tz_localize(None)
                     df_dates = df_dates.dropna(subset=['date'])
                     date_list = df_dates['date'].dt.strftime("%Y-%m-%d").unique().tolist()
                     st.success(f"Loaded {len(date_list)} dates")
