@@ -159,3 +159,56 @@ def compute_ndci_batch(_items_dict, _bounds, _gdf_wkt):
         })
 
     return pd.DataFrame(results)
+
+def classify_water_quality(ndci_value):
+    if ndci_value < WQ_THRESHOLDS['low_algae']:
+        return "Clear Water"
+    elif ndci_value < WQ_THRESHOLDS['moderate_bloom']:
+        return "Low Algae"
+    elif ndci_value < WQ_THRESHOLDS['high_bloom']:
+        return "Moderate Bloom"
+    elif ndci_value < WQ_THRESHOLDS['severe_bloom']:
+        return "High Bloom"
+    else:
+        return "Severe Bloom"
+
+def get_gemini_water_summary(ndci_df):
+    try:
+        model = genai.GenerativeModel(
+            "gemini-1.5-flash",
+            system_instruction=(
+                "You are an AI water quality expert. Analyze NDCI trends indicating chlorophyll-a levels. "
+                "Summarize current risk level, note if conditions are worsening/improving, "
+                "and suggest 1–2 specific actions for water managers (e.g., sampling, public advisory, nutrient control). "
+                "Keep it under 150 characters if possible for SMS."
+            )
+        )
+
+        mean_ndci = ndci_df['ndci_mean'].mean()
+        recent = ndci_df.iloc[-1]
+        trend = "stable"
+        if len(ndci_df) > 1:
+            delta = ndci_df['ndci_mean'].iloc[-1] - ndci_df['ndci_mean'].iloc[-2]
+            trend = "improving" if delta < -0.05 else "worsening" if delta > 0.05 else "stable"
+
+        prompt = (
+            f"Water Body NDCI: Recent={recent['ndci_mean']:.3f} ({classify_water_quality(recent['ndci_mean'])}), "
+            f"Avg={mean_ndci:.3f}, Trend={trend}. "
+            f"Image used from {recent['image_date']} for requested date {recent['requested_date']}. "
+            f"Provide concise management advice."
+        )
+
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                max_output_tokens=150,
+                temperature=0.2,
+            )
+        )
+
+        text = response.text.strip()
+        return text[:397] + "..." if len(text) > 400 else text
+
+    except Exception as e:
+        return f"AI summary error: {str(e)}"
+    
