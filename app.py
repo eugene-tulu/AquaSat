@@ -108,3 +108,54 @@ def fetch_items_for_dates(bounds, date_list, cloud_limit=10, window_days=3):
             continue
 
     return items_by_date
+
+@st.cache_data(show_spinner=False)
+def compute_ndci_batch(_items_dict, _bounds, _gdf_wkt):
+    """
+    Compute NDCI for all items in batch. Returns enriched DataFrame.
+    _gdf_wkt is used for caching and included in output.
+    """
+    if not _items_dict:
+        return pd.DataFrame()
+
+    import planetary_computer
+
+    signed_items = [planetary_computer.sign(item) for item in _items_dict.values()]
+
+    stack = stackstac.stack(
+        signed_items,
+        assets=["B04", "B05"],
+        resolution=10,
+        epsg=6933,
+        dtype="float32",
+        bounds_latlon=_bounds
+    )
+
+    # Create AOI from WKT
+    gdf = gpd.GeoDataFrame({'geometry': [gpd.GeoSeries.from_wkt([_gdf_wkt])[0]]}, crs="EPSG:4326")
+    gdf_proj = gdf.to_crs(stack.rio.crs)
+    aoi_geom = gdf_proj.geometry.unary_union
+    clipped = stack.rio.clip([aoi_geom], crs=stack.rio.crs)
+
+    with ProgressBar():
+        data = clipped.compute()
+
+    red = data.sel(band="B04")
+    red_edge = data.sel(band="B05")
+    ndci = (red_edge - red) / (red_edge + red)
+
+    results = []
+    for i, (target_date, item) in enumerate(_items_dict.items()):
+        ndci_slice = ndci.isel(time=i)
+        mean_val = float(np.nanmean(ndci_slice.values))
+
+        results.append({
+            "requested_date": target_date,
+            "image_date": item.datetime.strftime("%Y-%m-%d"),
+            "ndci_mean": mean_val,
+            "cloud_cover": item.properties.get("eo:cloud_cover", "N/A"),
+            "satellite": "Sentinel-2",
+            "geometry_wkt": _gdf_wkt  # Store for multi-polygon studies
+        })
+
+    return pd.DataFrame(results)
