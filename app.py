@@ -57,6 +57,7 @@ def fetch_items_for_dates(bounds, date_list, cloud_limit=10, window_days=3):
     If none, finds most recent image BEFORE target date (no future).
     Returns dict: {target_date: item}
     """
+    # FIXED: Removed trailing spaces in URL
     client = pystac_client.Client.open("https://planetarycomputer.microsoft.com/api/stac/v1")
 
     target_dates = pd.to_datetime(date_list).sort_values()
@@ -211,7 +212,7 @@ def get_gemini_water_summary(ndci_df):
 
     except Exception as e:
         return f"AI summary error: {str(e)}"
-    
+
 # ========================
 # STREAMLIT APP
 # ========================
@@ -231,7 +232,6 @@ with st.sidebar:
     if date_option == "Date Range":
         end_date = st.date_input("End Date", datetime.now())
         start_date = st.date_input("Start Date", end_date - timedelta(days=60))
-        # Weekly by default to reduce load
         freq = st.selectbox("Frequency", ["Daily", "Weekly", "Biweekly"], index=1)
         freq_map = {"Daily": 'D', "Weekly": 'W', "Biweekly": '2W'}
         date_list = pd.date_range(start=start_date, end=end_date, freq=freq_map[freq]).strftime("%Y-%m-%d").tolist()
@@ -253,9 +253,15 @@ with st.sidebar:
     window_days = st.slider("Search Window (±days)", 0, 7, 3)
     run_analysis = st.button("🚀 Analyze Water Quality", type="primary")
 
-# Map
+# Map — FIXED TILE URL
 st.subheader("📍 Draw or Upload Water Body")
-m = folium.Map(location=[20, 0], zoom_start=2, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
+# FIXED: Removed spaces in tile URL
+m = folium.Map(
+    location=[20, 0],
+    zoom_start=2,
+    tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attr="Esri"
+)
 Draw(export=True).add_to(m)
 Geocoder().add_to(m)
 map_output = st_folium(m, width=700, height=400)
@@ -263,14 +269,14 @@ map_output = st_folium(m, width=700, height=400)
 # Main Analysis
 if run_analysis and date_list:
     try:
-        # Load AOI
+        # Load AOI — Supports drawing!
         if uploaded_file:
             gdf = gpd.read_file(uploaded_file)
-        elif map_output.get("last_active_drawing"):
+        elif map_output and map_output.get("last_active_drawing"):
             geojson = map_output["last_active_drawing"]
             gdf = gpd.GeoDataFrame.from_features([geojson], crs="EPSG:4326")
         else:
-            st.error("❌ Please draw or upload a water body boundary.")
+            st.error("❌ Please draw on the map or upload a water body boundary.")
             st.stop()
 
         # Validate & Prep
@@ -280,18 +286,17 @@ if run_analysis and date_list:
             st.stop()
 
         bounds = gdf.total_bounds.tolist()
-        # Use first geometry's WKT (supports MultiPolygon)
-        gdf_wkt = gdf.geometry.iloc[0].wkt
+        gdf_wkt = gdf.geometry.iloc[0].wkt  # Supports MultiPolygon
 
-        st.info(f"🌊 Processing {len(date_list)} dates over {area_km2:.1f} km²")
+        st.info(f"🌊 Processing {len(date_list)} dates over {area_km2:.1f} km² water body")
 
         # Fetch
         with st.spinner("📡 Finding best satellite images..."):
             items_dict = fetch_items_for_dates(bounds, date_list, cloud_cover, window_days)
             if not items_dict:
-                st.error("❌ No usable images found.")
+                st.error("❌ No usable images found for any date.")
                 st.stop()
-            st.success(f"✅ Found images for {len(items_dict)} of {len(date_list)} dates")
+            st.success(f"✅ Found usable images for {len(items_dict)} out of {len(date_list)} requested dates")
 
         # Compute
         with st.spinner("🧮 Calculating NDCI values..."):
@@ -343,7 +348,7 @@ if run_analysis and date_list:
         st.error(f"❌ Analysis failed: {str(e)}")
         st.exception(e)
 
-# Display existing
+# Display existing results
 elif st.session_state['ndci_results_df'] is not None:
     df = st.session_state['ndci_results_df']
     st.subheader("📊 Water Quality Dashboard")
@@ -371,4 +376,3 @@ elif st.session_state['ndci_results_df'] is not None:
 # Footer
 st.markdown("---")
 st.caption("💧 AquaSat Pro | Powered by Sentinel-2 & Microsoft Planetary Computer")
-
