@@ -212,3 +212,51 @@ def get_gemini_water_summary(ndci_df):
     except Exception as e:
         return f"AI summary error: {str(e)}"
     
+# ========================
+# STREAMLIT APP
+# ========================
+
+st.set_page_config(layout="wide", page_title="💧 AquaSat Pro")
+st.title("💧 AquaSat Pro - Advanced Water Quality Monitor")
+st.markdown("Track chlorophyll & algal blooms using Sentinel-2. Handles missing dates intelligently.")
+
+# Sidebar
+with st.sidebar:
+    st.header("🛰️ Configuration")
+
+    uploaded_file = st.file_uploader("Upload Water Body (GeoJSON)", type=["geojson"])
+    
+    date_option = st.radio("Date Input", ["Date Range", "Upload CSV"], horizontal=True)
+    
+    if date_option == "Date Range":
+        end_date = st.date_input("End Date", datetime.now())
+        start_date = st.date_input("Start Date", end_date - timedelta(days=60))
+        # Weekly by default to reduce load
+        freq = st.selectbox("Frequency", ["Daily", "Weekly", "Biweekly"], index=1)
+        freq_map = {"Daily": 'D', "Weekly": 'W', "Biweekly": '2W'}
+        date_list = pd.date_range(start=start_date, end=end_date, freq=freq_map[freq]).strftime("%Y-%m-%d").tolist()
+    else:
+        date_file = st.file_uploader("Upload Dates CSV", type=["csv"])
+        if date_file:
+            df = pd.read_csv(date_file)
+            if 'date' not in df.columns:
+                st.error("CSV must have 'date' column")
+                date_list = []
+            else:
+                df['date'] = pd.to_datetime(df['date']).dt.strftime("%Y-%m-%d")
+                date_list = df['date'].dropna().unique().tolist()
+                st.success(f"Loaded {len(date_list)} dates")
+        else:
+            date_list = []
+
+    cloud_cover = st.slider("Max Cloud Cover (%)", 0, 50, 10)
+    window_days = st.slider("Search Window (±days)", 0, 7, 3)
+    run_analysis = st.button("🚀 Analyze Water Quality", type="primary")
+
+# Map
+st.subheader("📍 Draw or Upload Water Body")
+m = folium.Map(location=[20, 0], zoom_start=2, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
+Draw(export=True).add_to(m)
+Geocoder().add_to(m)
+map_output = st_folium(m, width=700, height=400)
+
