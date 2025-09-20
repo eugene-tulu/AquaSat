@@ -342,3 +342,33 @@ if run_analysis and date_list:
     except Exception as e:
         st.error(f"❌ Analysis failed: {str(e)}")
         st.exception(e)
+
+# Display existing
+elif st.session_state['ndci_results_df'] is not None:
+    df = st.session_state['ndci_results_df']
+    st.subheader("📊 Water Quality Dashboard")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Latest NDCI", f"{df.iloc[-1]['ndci_mean']:.3f}")
+    with col2:
+        st.metric("Avg NDCI", f"{df['ndci_mean'].mean():.3f}")
+    with col3:
+        st.metric("Status", df.iloc[-1]['quality_class'])
+
+    fig = px.line(df, x="requested_date", y="ndci_mean", color="quality_class", markers=True, hover_data=["image_date"])
+    fig.update_layout(yaxis_range=[-0.2, 1.0])
+    st.plotly_chart(fig, use_container_width=True)
+
+    display_df = df[["requested_date", "image_date", "ndci_mean", "quality_class", "cloud_cover"]]
+    st.dataframe(display_df.style.format({"ndci_mean": "{:.4f}"}))
+
+    if st.button("🔄 Regenerate AI Summary"):
+        with st.spinner("Thinking..."):
+            ai_summary = get_gemini_water_summary(df)
+            st.info(f"**AI Advisor:** {ai_summary}")
+
+# Footer
+st.markdown("---")
+st.caption("💧 AquaSat Pro | Powered by Sentinel-2 & Microsoft Planetary Computer")
+
