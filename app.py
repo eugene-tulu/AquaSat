@@ -260,3 +260,85 @@ Draw(export=True).add_to(m)
 Geocoder().add_to(m)
 map_output = st_folium(m, width=700, height=400)
 
+# Main Analysis
+if run_analysis and date_list:
+    try:
+        # Load AOI
+        if uploaded_file:
+            gdf = gpd.read_file(uploaded_file)
+        elif map_output.get("last_active_drawing"):
+            geojson = map_output["last_active_drawing"]
+            gdf = gpd.GeoDataFrame.from_features([geojson], crs="EPSG:4326")
+        else:
+            st.error("❌ Please draw or upload a water body boundary.")
+            st.stop()
+
+        # Validate & Prep
+        area_km2 = gdf.to_crs("EPSG:6933").area.sum() / 1e6
+        if area_km2 > MAX_AREA_KM2:
+            st.error(f"❌ Area ({area_km2:.1f} km²) exceeds limit of {MAX_AREA_KM2} km²")
+            st.stop()
+
+        bounds = gdf.total_bounds.tolist()
+        # Use first geometry's WKT (supports MultiPolygon)
+        gdf_wkt = gdf.geometry.iloc[0].wkt
+
+        st.info(f"🌊 Processing {len(date_list)} dates over {area_km2:.1f} km²")
+
+        # Fetch
+        with st.spinner("📡 Finding best satellite images..."):
+            items_dict = fetch_items_for_dates(bounds, date_list, cloud_cover, window_days)
+            if not items_dict:
+                st.error("❌ No usable images found.")
+                st.stop()
+            st.success(f"✅ Found images for {len(items_dict)} of {len(date_list)} dates")
+
+        # Compute
+        with st.spinner("🧮 Calculating NDCI values..."):
+            df_ndci = compute_ndci_batch(items_dict, bounds, gdf_wkt)
+            if df_ndci.empty:
+                st.error("❌ Calculation failed.")
+                st.stop()
+
+        # Classify
+        df_ndci['quality_class'] = df_ndci['ndci_mean'].apply(classify_water_quality)
+        st.session_state['ndci_results_df'] = df_ndci
+
+        # Results
+        st.success("✅ Analysis Complete!")
+
+        # Plot
+        fig = px.line(
+            df_ndci,
+            x="requested_date",
+            y="ndci_mean",
+            color="quality_class",
+            hover_data=["image_date"],
+            title="NDCI Trend (Chlorophyll-a Proxy)",
+            markers=True
+        )
+        fig.update_layout(yaxis_range=[-0.2, 1.0], xaxis_title="Requested Date", yaxis_title="NDCI")
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Table
+        display_df = df_ndci[["requested_date", "image_date", "ndci_mean", "quality_class", "cloud_cover"]]
+        st.dataframe(display_df.style.format({"ndci_mean": "{:.4f}"}))
+
+        # Download (FULL with geometry)
+        csv_full = df_ndci.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "📥 Download Full Results (CSV)",
+            csv_full,
+            f"water_quality_ndci_{datetime.now().strftime('%Y%m%d')}.csv",
+            "text/csv",
+            help="Includes geometry_wkt for multi-polygon studies"
+        )
+
+        # AI Summary
+        with st.spinner("🤖 Generating AI insights..."):
+            ai_summary = get_gemini_water_summary(df_ndci)
+            st.info(f"**AI Water Quality Advisor:** {ai_summary}")
+
+    except Exception as e:
+        st.error(f"❌ Analysis failed: {str(e)}")
+        st.exception(e)
